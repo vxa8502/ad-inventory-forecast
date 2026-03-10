@@ -1,5 +1,15 @@
 steps:
-  # Step 1: Build Docker image with commit SHA and latest tags
+  # Step 1: Install dependencies and run tests
+  - name: 'python:3.11-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install --quiet pytest pytest-mock google-cloud-bigquery python-dotenv
+        pip install --quiet -e .
+        pytest tests/ -v --tb=short
+
+  # Step 2: Build Docker image with commit SHA and latest tags
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
@@ -9,14 +19,14 @@ steps:
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/ad-inventory/dashboard:latest'
       - '.'
 
-  # Step 2: Push all tags to Artifact Registry
+  # Step 3: Push all tags to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
       - '--all-tags'
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/ad-inventory/dashboard'
 
-  # Step 3: Deploy to Cloud Run
+  # Step 4: Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:

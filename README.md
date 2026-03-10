@@ -306,17 +306,86 @@ The dashboard is deployed on Google Cloud Run with automatic CI/CD via Cloud Bui
 - Automatic deploys on push to main branch
 - ~$0/month within Cloud Run free tier (low traffic)
 
-**Manual Deployment:**
+### Replicating This Setup
+
+#### 1. Enable Required APIs
 
 ```bash
-# Create Artifact Registry repository (one-time)
+gcloud services enable \
+  bigquery.googleapis.com \
+  bigqueryconnection.googleapis.com \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com
+```
+
+#### 2. Create Service Account with IAM Permissions
+
+```bash
+# Create dedicated service account
+gcloud iam service-accounts create dashboard-sa \
+  --display-name="Ad Inventory Dashboard"
+
+# Grant BigQuery permissions (minimum required)
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:dashboard-sa@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/bigquery.user"
+
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:dashboard-sa@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/bigquery.dataViewer"
+```
+
+| Role | Purpose |
+|------|---------|
+| `roles/bigquery.user` | Run queries, create jobs |
+| `roles/bigquery.dataViewer` | Read tables in `ad_inventory` dataset |
+
+For CI/CD, Cloud Build also needs:
+- `roles/run.admin` (deploy to Cloud Run)
+- `roles/iam.serviceAccountUser` (act as dashboard-sa)
+
+#### 3. Set Up Cost Guardrails
+
+BigQuery Sandbox (no billing) does NOT support BigQuery ML. Enable billing safely:
+
+```bash
+# Activate $300 free trial (GCP Console > Billing)
+# Then set budget alert:
+
+gcloud billing budgets create \
+  --billing-account=BILLING_ACCOUNT_ID \
+  --display-name="Ad Inventory Daily Cap" \
+  --budget-amount=5USD \
+  --threshold-rule=percent=50 \
+  --threshold-rule=percent=90 \
+  --threshold-rule=percent=100
+```
+
+**Recommended settings:**
+- Daily budget: $5 (covers worst-case full-table scans)
+- Alert thresholds: 50%, 90%, 100%
+- Email notifications to project owner
+
+#### 4. Create Artifact Registry Repository
+
+```bash
 gcloud artifacts repositories create ad-inventory \
   --repository-format=docker \
   --location=us-central1
+```
 
-# Build and push image
+#### 5. Build and Deploy
+
+```bash
+# Authenticate Docker
 gcloud auth configure-docker us-central1-docker.pkg.dev
-docker build -t us-central1-docker.pkg.dev/PROJECT_ID/ad-inventory/dashboard:latest .
+
+# Build image (use --platform for M1/M2 Macs)
+docker build --platform linux/amd64 \
+  -t us-central1-docker.pkg.dev/PROJECT_ID/ad-inventory/dashboard:latest .
+
+# Push to Artifact Registry
 docker push us-central1-docker.pkg.dev/PROJECT_ID/ad-inventory/dashboard:latest
 
 # Deploy to Cloud Run
@@ -325,19 +394,40 @@ gcloud run deploy ad-inventory-dashboard \
   --platform=managed \
   --region=us-central1 \
   --allow-unauthenticated \
-  --memory=1Gi
+  --service-account=dashboard-sa@PROJECT_ID.iam.gserviceaccount.com \
+  --memory=1Gi \
+  --timeout=300
 ```
 
-**CI/CD Setup:**
+#### 6. CI/CD Setup (GitHub Trigger)
 
 ```bash
-# Connect GitHub trigger (deploys on push to main)
+# Connect GitHub repository (requires OAuth in Cloud Console)
 gcloud builds triggers create github \
   --repo-name=ad-inventory-forecast \
   --repo-owner=vxa8502 \
   --branch-pattern='^main$' \
   --build-config=cloudbuild.yaml
 ```
+
+The `cloudbuild.yaml` pipeline runs: **test** (pytest) -> **build** -> **push** -> **deploy**.
+
+### Streamlit Community Cloud (Alternative)
+
+For sharing without GCP context, deploy to Streamlit Community Cloud:
+
+1. Go to [share.streamlit.io](https://share.streamlit.io)
+2. Connect your GitHub account
+3. Select `vxa8502/ad-inventory-forecast`
+4. Set main file path: `app/main.py`
+5. Add secrets in Advanced Settings:
+   ```toml
+   [gcp_service_account]
+   type = "service_account"
+   project_id = "your-project-id"
+   private_key = "-----BEGIN PRIVATE KEY-----\n..."
+   client_email = "dashboard-sa@project.iam.gserviceaccount.com"
+   ```
 
 ### Local Development
 
@@ -348,6 +438,139 @@ pip install -r requirements-app.txt
 # Run Streamlit locally
 streamlit run app/main.py
 ```
+
+## Scaling to 10M Ad Slots
+
+This prototype forecasts 19 ad units. Production ad servers manage 10M+ slots. Here's how the architecture extends:
+
+### Retraining Cadence
+
+| Model | Retraining Schedule | Rationale |
+|-------|---------------------|-----------|
+| **ARIMA+** | Weekly (Saturday 2 AM UTC) | Learns from recent traffic patterns; weekly balances freshness vs. compute cost |
+| **ARIMA+ XREG** | Weekly (Saturday 2 AM UTC) | Same as ARIMA+; external regressors (holidays) updated quarterly |
+| **TimesFM 2.5** | Never | Zero-shot foundation model; no training required |
+
+### Cloud Scheduler Implementation
+
+```bash
+# Create Cloud Scheduler job for weekly ARIMA+ retraining
+gcloud scheduler jobs create http arima-weekly-retrain \
+  --location=us-central1 \
+  --schedule="0 2 * * 6" \
+  --uri="https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/pipelineJobs" \
+  --http-method=POST \
+  --oauth-service-account-email=pipeline-sa@PROJECT_ID.iam.gserviceaccount.com \
+  --message-body='{"displayName": "arima-retrain-weekly", "templateUri": "gs://PROJECT_ID-pipelines/arima_retrain.yaml"}'
+
+# Daily forecast refresh (6 AM before sales team)
+gcloud scheduler jobs create http daily-forecast-refresh \
+  --location=us-central1 \
+  --schedule="0 6 * * *" \
+  --uri="https://CLOUD_RUN_URL/api/refresh-forecasts" \
+  --http-method=POST \
+  --oidc-service-account-email=scheduler-sa@PROJECT_ID.iam.gserviceaccount.com
+```
+
+### Vertex AI Pipelines DAG
+
+```python
+# pipelines/arima_retrain.py (simplified)
+from kfp.v2 import dsl
+from kfp.v2.dsl import component
+
+@component(base_image="python:3.11-slim")
+def extract_recent_traffic(project_id: str, lookback_days: int) -> str:
+    """Extract last N days of pageview data to staging table."""
+    from google.cloud import bigquery
+    client = bigquery.Client(project=project_id)
+    query = f"""
+    CREATE OR REPLACE TABLE `{project_id}.ad_inventory.staging_recent`
+    AS SELECT * FROM `{project_id}.ad_inventory.daily_impressions`
+    WHERE date >= DATE_SUB(CURRENT_DATE(), INTERVAL {lookback_days} DAY)
+    """
+    client.query(query).result()
+    return f"{project_id}.ad_inventory.staging_recent"
+
+@component(base_image="python:3.11-slim")
+def train_arima(project_id: str, staging_table: str) -> str:
+    """Retrain ARIMA+ model on recent data."""
+    from google.cloud import bigquery
+    client = bigquery.Client(project=project_id)
+    query = f"""
+    CREATE OR REPLACE MODEL `{project_id}.ad_inventory.arima_model`
+    OPTIONS(model_type='ARIMA_PLUS', time_series_timestamp_col='date',
+            time_series_data_col='daily_impressions', time_series_id_col='ad_unit',
+            holiday_region='US')
+    AS SELECT date, ad_unit, daily_impressions FROM `{staging_table}`
+    """
+    client.query(query).result()
+    return f"{project_id}.ad_inventory.arima_model"
+
+@component(base_image="python:3.11-slim")
+def evaluate_and_promote(project_id: str, model_path: str, mape_threshold: float):
+    """Evaluate new model; promote only if MAPE improves."""
+    from google.cloud import bigquery
+    client = bigquery.Client(project=project_id)
+    # Run ML.EVALUATE, compare to previous, swap if better
+    # Rollback logic omitted for brevity
+
+@dsl.pipeline(name="arima-weekly-retrain")
+def arima_retrain_pipeline(project_id: str = "PROJECT_ID"):
+    extract_task = extract_recent_traffic(project_id=project_id, lookback_days=730)
+    train_task = train_arima(project_id=project_id, staging_table=extract_task.output)
+    evaluate_and_promote(project_id=project_id, model_path=train_task.output, mape_threshold=0.20)
+```
+
+### Orchestration
+
+Replace manual SQL scripts with **Vertex AI Pipelines**:
+- Kubeflow-based DAGs for extract -> train -> evaluate -> promote
+- Built-in experiment tracking and model versioning
+- Automatic rollback on metric regression (MAPE > threshold)
+
+### Scheduling
+
+- **Weekly ARIMA+ retraining**: Cloud Scheduler triggers Saturday 2 AM UTC (low traffic)
+- **Daily forecast refresh**: 6 AM before sales team starts
+- **Anomaly alerts**: Pub/Sub notifications when probability > 0.95
+
+### Model Strategy at Scale
+
+| Dimension | ARIMA+ | TimesFM |
+|-----------|--------|---------|
+| Training | One model per ad unit (10M models) | Single zero-shot call |
+| Retraining | Weekly per unit | None required |
+| Cost | ~$0.001/unit/week | ~$0.0001/forecast |
+| Cold-start | Needs 90+ days history | Works immediately |
+
+**Hybrid approach**: Use TimesFM for cold-start and long-tail slots (80% of inventory, low volume). Reserve ARIMA+ XREG for top 20% revenue-driving slots where interpretability matters to stakeholders.
+
+### Storage
+
+Partitioned forecast tables reduce query costs 10-100x:
+
+```sql
+CREATE TABLE forecasts
+PARTITION BY DATE(forecast_date)
+CLUSTER BY ad_unit
+```
+
+### Serving
+
+**BigQuery BI Engine** ($40/month for 1GB reservation) enables sub-second dashboard queries on 10M row tables, eliminating cold-start latency.
+
+### Cost Model
+
+| Component | 10M Slots/Month |
+|-----------|-----------------|
+| ARIMA+ training (top 2M) | ~$2,000 |
+| TimesFM inference (8M) | ~$800 |
+| BigQuery storage | ~$50 |
+| BI Engine | ~$40 |
+| **Total** | **~$3,000/month** |
+
+At $3 CPM on 10M daily impressions, this represents <0.01% of monthly ad revenue.
 
 ## License
 
