@@ -3,7 +3,12 @@
 --   - Calendar: day_of_week (1-7, where 1=Sunday), is_weekend, quarter, week_of_year
 --   - Holiday: is_holiday flag, holiday_name, days_to_next_holiday
 --
--- Note: Google Trends external regressor was evaluated but scoped out.
+-- Timezone: All date calculations use UTC (BigQuery default).
+-- Wikipedia pageviews in BQ public dataset are aggregated per UTC day.
+-- DAYOFWEEK returns 1=Sunday through 7=Saturday in UTC.
+-- If deploying with local-timezone ad data, adapt date extraction accordingly.
+--
+-- Google Trends: External regressor was evaluated but scoped out.
 -- The BQ public dataset captures trending breakout events, not persistent topic
 -- interest—only 1/35 of our Wikipedia articles appeared in US top terms.
 -- Calendar features provide cleaner, deterministic cyclical signals.
@@ -11,6 +16,9 @@
 -- Edge case (days_to_next_holiday):
 --   When is_holiday=TRUE, days_to_next_holiday=0 (today IS the holiday).
 --   This captures pre-holiday ramp-up patterns while being unambiguous.
+--
+-- Atomicity: DELETE then INSERT is not atomic in BigQuery.
+-- If INSERT fails after DELETE, data is lost. Re-run pipeline to recover.
 
 -- Clear existing data for idempotent re-runs
 DELETE FROM `{project_id}.{dataset}.daily_impressions` WHERE TRUE;

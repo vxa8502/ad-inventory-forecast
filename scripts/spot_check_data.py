@@ -9,24 +9,21 @@ Usage:
     python -m scripts.spot_check_data
 """
 
-import sys
+from __future__ import annotations
 
-from config import settings
 from config.helpers import get_table_id
+from src.cli import require_project_id
+from src.printing_utils import print_section
 from src.validators import spot_check_random_rows
 
 
 def main() -> None:
     """Fetch and display 10 random rows for manual inspection."""
-    if not settings.PROJECT_ID:
-        print("Error: GCP_PROJECT_ID not set. Copy .env.example to .env")
-        sys.exit(1)
+    require_project_id()
 
     table_id = get_table_id("daily_impressions")
 
-    print("=" * 70)
-    print("SPOT CHECK: 10 Random Rows from daily_impressions")
-    print("=" * 70)
+    print_section("SPOT CHECK: 10 Random Rows from daily_impressions")
 
     rows = spot_check_random_rows(table_id, n=10)
 
@@ -43,9 +40,7 @@ def main() -> None:
         print(f"  is_holiday: {row['is_holiday']} | holiday_name: {holiday_name}")
         print(f"  days_to_next_holiday: {row['days_to_next_holiday']}")
 
-    print("\n" + "=" * 70)
-    print("VERIFICATION STEPS:")
-    print("=" * 70)
+    print_section("VERIFICATION STEPS")
     print("[ ] No unexpected NULLs in required columns")
     print("[ ] desktop + mobile = daily_impressions")
     print("[ ] day_of_week in range 1-7 (1=Sunday)")
@@ -54,7 +49,6 @@ def main() -> None:
     print("[ ] week_of_year in range 1-53")
     print("[ ] is_holiday=TRUE implies days_to_next_holiday=0")
     print("[ ] holiday_name populated when is_holiday=TRUE")
-    print("=" * 70)
 
 
 if __name__ == "__main__":

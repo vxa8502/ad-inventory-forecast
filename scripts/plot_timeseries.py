@@ -7,8 +7,11 @@ Usage:
     python -m scripts.plot_timeseries [--input-dir INPUT_DIR] [--output-dir OUTPUT_DIR]
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -27,15 +30,15 @@ from src.logging_config import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-COLORS = {
-    "primary": "#2E86AB",
-    "secondary": "#E94F37",
-    "dark": "#1B1B1E",
-    "desktop": "#44AF69",
-    "mobile": "#F8333C",
-    "above_median": "#2E86AB",
-    "below_median": "#A23B72",
-}
+__all__ = [
+    "get_us_holidays",
+    "plot_single_timeseries",
+    "plot_weekday_heatmap",
+    "plot_distribution_comparison",
+]
+
+# Import centralized colors from config
+COLORS = settings.PLOT_COLORS
 
 
 def _save_figure(fig: plt.Figure, path: Path) -> None:
@@ -46,16 +49,18 @@ def _save_figure(fig: plt.Figure, path: Path) -> None:
     logger.info("Saved plot: %s", path)
 
 
-def load_holidays() -> list[str]:
-    """Load holiday dates from reference CSV."""
+@lru_cache(maxsize=1)
+def get_us_holidays() -> tuple[str, ...]:
+    """Load holiday dates from reference CSV (cached via lru_cache).
+
+    Returns:
+        Tuple of holiday date strings in YYYY-MM-DD format.
+    """
     csv_path = settings.PROJECT_ROOT / "data" / "reference" / "us_holidays.csv"
     if csv_path.exists():
         df = pd.read_csv(csv_path)
-        return df["holiday_date"].tolist()
-    return []
-
-
-US_HOLIDAYS = load_holidays()
+        return tuple(df["holiday_date"].tolist())
+    return ()
 
 
 def plot_single_timeseries(
@@ -70,7 +75,7 @@ def plot_single_timeseries(
     unit_df["date"] = pd.to_datetime(unit_df["date"])
     unit_df = unit_df.sort_values("date")
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=settings.PLOT_FIGURE_SIZE, sharex=True)
     fig.suptitle(f"Time Series Diagnostics: {ad_unit}", fontsize=14, fontweight="bold")
 
     ax1 = axes[0]
@@ -83,7 +88,7 @@ def plot_single_timeseries(
     ax1.grid(True, alpha=0.3)
 
     if show_holidays:
-        for holiday in US_HOLIDAYS:
+        for holiday in get_us_holidays():
             holiday_date = pd.to_datetime(holiday)
             date_min, date_max = unit_df["date"].min(), unit_df["date"].max()
             if date_min <= holiday_date <= date_max:
@@ -98,7 +103,7 @@ def plot_single_timeseries(
                 ax1.axvline(
                     event_dt, color="red", alpha=0.7, linestyle="-", linewidth=1.5
                 )
-                ypos = unit_df["daily_impressions"].max() * 0.95
+                ypos = unit_df["daily_impressions"].max() * settings.PLOT_ANNOTATION_HEIGHT_PCT
                 ax1.annotate(
                     event_name,
                     xy=(event_dt, ypos),

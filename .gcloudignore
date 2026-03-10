@@ -1,0 +1,38 @@
+# Git and version control
+.git
+.gitignore
+
+# Environment and credentials
+.env
+.env.*
+*.json
+credentials/
+
+# Python bytecode
+*.pyc
+__pycache__/
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Development directories (not needed in container)
+home/
+scripts/
+sql/
+data/
+docs/
+tests/
+
+# Documentation (except README)
+*.md
+!README.md
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Virtual environments
+.venv/
+venv/

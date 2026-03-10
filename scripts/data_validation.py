@@ -7,6 +7,8 @@ Usage:
     python -m scripts.data_validation [--dry-run] [--output-dir OUTPUT_DIR]
 """
 
+from __future__ import annotations
+
 import argparse
 import logging
 from pathlib import Path
@@ -17,23 +19,38 @@ import pandas as pd
 from config import settings
 from config.events import KNOWN_EVENTS, SAMPLE_AD_UNITS
 from config.helpers import format_sql_list, get_table_id
-from src.bq_client import run_query
+from src.bq_client import query_to_dataframe
+from src.cli import add_dry_run_arg, require_project_id
 from src.logging_config import setup_logging
+from src.printing_utils import format_markdown_table, print_section
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
 
-def _run_query_to_df(sql: str, description: str) -> pd.DataFrame:
-    """Execute query and return results as DataFrame."""
-    logger.info("%s...", description)
-    return run_query(sql).to_dataframe()
+def _run_table_query(
+    sql_template: str,
+    description: str,
+    **table_names: str,
+) -> pd.DataFrame:
+    """Execute a parameterized query with table ID substitution.
+
+    Args:
+        sql_template: SQL with {table_name} placeholders.
+        description: Human-readable description for logging.
+        **table_names: Mapping of placeholder names to table names.
+
+    Returns:
+        Query results as DataFrame.
+    """
+    table_ids = {name: get_table_id(table) for name, table in table_names.items()}
+    sql = sql_template.format(**table_ids)
+    return query_to_dataframe(sql, description)
 
 
 def query_distribution_stats() -> pd.DataFrame:
     """Query impression distribution statistics per ad unit."""
-    table = get_table_id("raw_pageviews")
-    sql = f"""
+    sql_template = """
     SELECT
         ad_unit,
         COUNT(*) AS n_days,
@@ -49,13 +66,12 @@ def query_distribution_stats() -> pd.DataFrame:
     GROUP BY ad_unit
     ORDER BY total_impressions DESC
     """
-    return _run_query_to_df(sql, "Querying distribution statistics")
+    return _run_table_query(sql_template, "Querying distribution statistics", table="raw_pageviews")
 
 
 def query_device_split_verification() -> pd.DataFrame:
     """Verify desktop + mobile = total impressions."""
-    table = get_table_id("raw_pageviews")
-    sql = f"""
+    sql_template = """
     SELECT
         ad_unit,
         SUM(daily_impressions) AS total_impressions,
@@ -68,33 +84,33 @@ def query_device_split_verification() -> pd.DataFrame:
     GROUP BY ad_unit
     ORDER BY discrepancy DESC
     """
-    return _run_query_to_df(sql, "Verifying device splits")
+    return _run_table_query(sql_template, "Verifying device splits", table="raw_pageviews")
 
 
 def query_timeseries_sample(ad_units: list[str]) -> pd.DataFrame:
     """Query daily time series for sample ad units."""
-    table = get_table_id("raw_pageviews")
     ad_unit_list = format_sql_list(ad_units)
-    sql = f"""
+    sql_template = f"""
     SELECT
         date,
         ad_unit,
         daily_impressions,
         desktop_impressions,
         mobile_impressions
-    FROM `{table}`
+    FROM `{{table}}`
     WHERE ad_unit IN ({ad_unit_list})
     ORDER BY ad_unit, date
     """
-    description = f"Querying time series for {len(ad_units)} sample ad units"
-    return _run_query_to_df(sql, description)
+    return _run_table_query(
+        sql_template,
+        f"Querying time series for {len(ad_units)} sample ad units",
+        table="raw_pageviews",
+    )
 
 
 def query_holiday_impact() -> pd.DataFrame:
     """Check impression patterns on holidays vs non-holidays."""
-    pageviews = get_table_id("raw_pageviews")
-    holidays = get_table_id("us_holidays")
-    sql = f"""
+    sql_template = """
     SELECT
         d.ad_unit,
         h.holiday_name,
@@ -106,13 +122,17 @@ def query_holiday_impact() -> pd.DataFrame:
     GROUP BY d.ad_unit, h.holiday_name
     ORDER BY d.ad_unit, h.holiday_name
     """
-    return _run_query_to_df(sql, "Analyzing holiday impact")
+    return _run_table_query(
+        sql_template,
+        "Analyzing holiday impact",
+        pageviews="raw_pageviews",
+        holidays="us_holidays",
+    )
 
 
 def query_weekday_patterns() -> pd.DataFrame:
     """Analyze day-of-week patterns per ad unit."""
-    table = get_table_id("raw_pageviews")
-    sql = f"""
+    sql_template = """
     SELECT
         ad_unit,
         EXTRACT(DAYOFWEEK FROM date) AS day_of_week,
@@ -122,7 +142,7 @@ def query_weekday_patterns() -> pd.DataFrame:
     GROUP BY ad_unit, day_of_week
     ORDER BY ad_unit, day_of_week
     """
-    return _run_query_to_df(sql, "Analyzing weekday patterns")
+    return _run_table_query(sql_template, "Analyzing weekday patterns", table="raw_pageviews")
 
 
 def check_distribution_balance(df: pd.DataFrame) -> dict[str, Any]:
@@ -177,18 +197,22 @@ def generate_distribution_report(df: pd.DataFrame, balance: dict[str, Any]) -> s
         "",
         "### Per-Ad-Unit Statistics",
         "",
-        "| Ad Unit | Days | Mean | Median | Std | Min | Max |",
-        "|---------|------|------|--------|-----|-----|-----|",
     ]
 
-    for _, row in df.iterrows():
-        lines.append(
-            f"| {row['ad_unit']} | {row['n_days']} | "
-            f"{row['mean_impressions']:,.0f} | {row['median_impressions']:,} | "
-            f"{row['std_impressions']:,.0f} | {row['min_impressions']:,} | "
-            f"{row['max_impressions']:,} |"
-        )
-
+    table = format_markdown_table(
+        rows=df.to_dict("records"),
+        columns=["ad_unit", "n_days", "mean_impressions", "median_impressions",
+                 "std_impressions", "min_impressions", "max_impressions"],
+        headers=["Ad Unit", "Days", "Mean", "Median", "Std", "Min", "Max"],
+        formatters={
+            "mean_impressions": lambda x: f"{x:,.0f}",
+            "median_impressions": lambda x: f"{x:,}",
+            "std_impressions": lambda x: f"{x:,.0f}",
+            "min_impressions": lambda x: f"{x:,}",
+            "max_impressions": lambda x: f"{x:,}",
+        },
+    )
+    lines.append(table)
     lines.extend(["", ""])
     return "\n".join(lines)
 
@@ -216,22 +240,30 @@ def generate_device_split_report(df: pd.DataFrame, verification: dict[str, Any])
         "",
         "### Device Mix Summary",
         "",
-        "| Ad Unit | Total | Desktop | Mobile | Desktop % |",
-        "|---------|-------|---------|--------|-----------|",
     ])
 
-    for _, row in df.iterrows():
-        desktop_pct = (
-            row["desktop_sum"] / row["total_impressions"] * 100
-            if row["total_impressions"] > 0
-            else 0
-        )
-        lines.append(
-            f"| {row['ad_unit']} | {row['total_impressions']:,} | "
-            f"{row['desktop_sum']:,} | {row['mobile_sum']:,} | "
-            f"{desktop_pct:.1f}% |"
-        )
+    # Add desktop_pct column using vectorized pandas operations
+    df_with_pct = df.copy()
+    df_with_pct["desktop_pct"] = (
+        df_with_pct["desktop_sum"]
+        .div(df_with_pct["total_impressions"])
+        .mul(100)
+        .fillna(0)
+    )
+    rows_with_pct = df_with_pct.to_dict(orient="records")
 
+    table = format_markdown_table(
+        rows=rows_with_pct,
+        columns=["ad_unit", "total_impressions", "desktop_sum", "mobile_sum", "desktop_pct"],
+        headers=["Ad Unit", "Total", "Desktop", "Mobile", "Desktop %"],
+        formatters={
+            "total_impressions": lambda x: f"{x:,}",
+            "desktop_sum": lambda x: f"{x:,}",
+            "mobile_sum": lambda x: f"{x:,}",
+            "desktop_pct": lambda x: f"{x:.1f}%",
+        },
+    )
+    lines.append(table)
     lines.extend(["", ""])
     return "\n".join(lines)
 
@@ -258,13 +290,96 @@ def generate_events_report() -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Data validation suite")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Estimate query costs without executing",
+def _run_validations(output_dir: Path) -> dict[str, Any]:
+    """Execute all validation queries and save results.
+
+    Args:
+        output_dir: Directory to save output files.
+
+    Returns:
+        Dictionary with validation results for summary printing.
+    """
+    logger.info("Starting data validation...")
+
+    # Query and save distribution stats
+    dist_df = query_distribution_stats()
+    dist_df.to_csv(output_dir / "distribution_stats.csv", index=False)
+    balance = check_distribution_balance(dist_df)
+    logger.info(
+        "Distribution balance: %sx ratio (max=%s, min=%s)",
+        balance["max_min_ratio"],
+        balance["max_ad_unit"],
+        balance["min_ad_unit"],
     )
+
+    # Query and save device splits
+    device_df = query_device_split_verification()
+    device_df.to_csv(output_dir / "device_splits.csv", index=False)
+    device_verification = verify_device_splits(device_df)
+    logger.info("Device splits valid: %s", device_verification["all_splits_valid"])
+
+    # Query and save time series sample
+    ts_df = query_timeseries_sample(SAMPLE_AD_UNITS)
+    ts_df.to_csv(output_dir / "sample_timeseries.csv", index=False)
+    logger.info("Time series data exported for %d ad units", len(SAMPLE_AD_UNITS))
+
+    # Query and save weekday patterns
+    weekday_df = query_weekday_patterns()
+    weekday_df.to_csv(output_dir / "weekday_patterns.csv", index=False)
+    logger.info("Weekday patterns exported")
+
+    # Generate markdown report
+    report_lines = [
+        "# Data Validation Report",
+        "",
+        f"*Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}*",
+        "",
+        "---",
+        "",
+        generate_distribution_report(dist_df, balance),
+        generate_device_split_report(device_df, device_verification),
+        generate_events_report(),
+    ]
+
+    report_path = output_dir / "validation_report.md"
+    report_path.write_text("\n".join(report_lines))
+    logger.info("Validation report written to %s", report_path)
+
+    return {
+        "balance": balance,
+        "device_verification": device_verification,
+        "sample_count": len(SAMPLE_AD_UNITS),
+    }
+
+
+def _print_summary(results: dict[str, Any], output_dir: Path) -> None:
+    """Print validation summary to console.
+
+    Args:
+        results: Results from _run_validations.
+        output_dir: Output directory path for display.
+    """
+    balance = results["balance"]
+    device_verification = results["device_verification"]
+
+    print_section("VALIDATION SUMMARY")
+    print(f"Distribution ratio:     {balance['max_min_ratio']}x")
+    print(f"Highest traffic:        {balance['max_ad_unit']}")
+    print(f"Lowest traffic:         {balance['min_ad_unit']}")
+    print(f"Device splits valid:    {device_verification['all_splits_valid']}")
+    print(f"Sample plots ready:     {results['sample_count']} ad units")
+    print(f"\nOutputs saved to: {output_dir}")
+    print("  - distribution_stats.csv")
+    print("  - device_splits.csv")
+    print("  - sample_timeseries.csv")
+    print("  - weekday_patterns.csv")
+    print("  - validation_report.md")
+
+
+def main() -> None:
+    """CLI entrypoint for data validation suite."""
+    parser = argparse.ArgumentParser(description="Data validation suite")
+    add_dry_run_arg(parser)
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -272,6 +387,7 @@ def main() -> None:
         help="Output directory for reports and plots",
     )
     args = parser.parse_args()
+    require_project_id()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Output directory: %s", args.output_dir)
@@ -286,63 +402,8 @@ def main() -> None:
         print("5. Weekday patterns query")
         return
 
-    logger.info("Starting data validation...")
-
-    dist_df = query_distribution_stats()
-    dist_df.to_csv(args.output_dir / "distribution_stats.csv", index=False)
-    balance = check_distribution_balance(dist_df)
-    logger.info(
-        "Distribution balance: %sx ratio (max=%s, min=%s)",
-        balance["max_min_ratio"],
-        balance["max_ad_unit"],
-        balance["min_ad_unit"],
-    )
-
-    device_df = query_device_split_verification()
-    device_df.to_csv(args.output_dir / "device_splits.csv", index=False)
-    device_verification = verify_device_splits(device_df)
-    logger.info("Device splits valid: %s", device_verification["all_splits_valid"])
-
-    ts_df = query_timeseries_sample(SAMPLE_AD_UNITS)
-    ts_df.to_csv(args.output_dir / "sample_timeseries.csv", index=False)
-    logger.info("Time series data exported for %d ad units", len(SAMPLE_AD_UNITS))
-
-    weekday_df = query_weekday_patterns()
-    weekday_df.to_csv(args.output_dir / "weekday_patterns.csv", index=False)
-    logger.info("Weekday patterns exported")
-
-    report_lines = [
-        "# Data Validation Report",
-        "",
-        f"*Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}*",
-        "",
-        "---",
-        "",
-    ]
-
-    report_lines.append(generate_distribution_report(dist_df, balance))
-    report_lines.append(generate_device_split_report(device_df, device_verification))
-    report_lines.append(generate_events_report())
-
-    report_path = args.output_dir / "validation_report.md"
-    report_path.write_text("\n".join(report_lines))
-    logger.info("Validation report written to %s", report_path)
-
-    print("\n" + "=" * 60)
-    print("VALIDATION SUMMARY")
-    print("=" * 60)
-    print(f"Distribution ratio:     {balance['max_min_ratio']}x")
-    print(f"Highest traffic:        {balance['max_ad_unit']}")
-    print(f"Lowest traffic:         {balance['min_ad_unit']}")
-    print(f"Device splits valid:    {device_verification['all_splits_valid']}")
-    print(f"Sample plots ready:     {len(SAMPLE_AD_UNITS)} ad units")
-    print("=" * 60)
-    print(f"\nOutputs saved to: {args.output_dir}")
-    print("  - distribution_stats.csv")
-    print("  - device_splits.csv")
-    print("  - sample_timeseries.csv")
-    print("  - weekday_patterns.csv")
-    print("  - validation_report.md")
+    results = _run_validations(args.output_dir)
+    _print_summary(results, args.output_dir)
 
 
 if __name__ == "__main__":

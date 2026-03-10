@@ -8,8 +8,8 @@
 | Source | BigQuery Public Dataset: `bigquery-public-data.wikipedia.pageviews_*` |
 | Date Range | 2023-01-01 to 2024-12-31 (731 days) |
 | Granularity | Daily aggregation from hourly source |
-| Total Records | 25,544 rows (see Known Limitations for 41-row gap) |
-| Ad Units (Articles) | 35 |
+| Total Records | 24,854 rows |
+| Ad Units (Articles) | 34 (2023_MLB_season excluded due to low traffic) |
 | Verticals | 5 (Technology, Sports, Entertainment, Finance, Health) |
 
 ---
@@ -27,7 +27,7 @@ analogous to real ad server traffic:
 - Event-driven anomalies (product launches, sports events, breaking news)
 
 **Intended Use**: Training and evaluating time series forecasting models
-(TimesFM 2.5, ARIMA_PLUS, ARIMA_PLUS_XREG) for ad inventory prediction.
+(TimesFM 2.5, ARIMA+, ARIMA+ XREG) for ad inventory prediction.
 
 ---
 
@@ -37,7 +37,7 @@ analogous to real ad server traffic:
 
 1. **Traffic volume**: Minimum ~1,000 daily pageviews to ensure signal over noise
 2. **Seasonal patterns**: Articles with known weekly/monthly/annual cycles preferred
-3. **Vertical diversity**: 7 articles per vertical for balanced coverage
+3. **Vertical diversity**: 6-7 articles per vertical for balanced coverage
 4. **Data quality**: Exclude articles with known anomalies (redirects, title changes, bot traffic)
 
 ### Technology (7 articles)
@@ -52,7 +52,7 @@ analogous to real ad server traffic:
 | Microsoft | Major tech company, AI news driver in 2023 | High | Clean |
 | Tesla,_Inc. | Tech/auto crossover, volatile but high volume | Very High | Elon news creates spikes |
 
-### Sports (7 articles)
+### Sports (6 articles)
 
 | Article | Rationale | Traffic Tier | Quality Notes |
 |---------|-----------|--------------|---------------|
@@ -62,7 +62,7 @@ analogous to real ad server traffic:
 | Premier_League | International football, year-round with summer break | High | Clean |
 | LeBron_James | Individual athlete, consistent baseline + game spikes | High | Clean |
 | UFC | Growing combat sport, PPV event spikes | Medium | Clean |
-| 2023_MLB_season | Baseball season coverage | Medium | Year-specific; sparse late-2024 traffic expected |
+| ~~2023_MLB_season~~ | ~~Baseball season coverage~~ | ~~Medium~~ | Excluded: insufficient traffic for forecasting |
 
 ### Entertainment (7 articles)
 
@@ -135,7 +135,7 @@ Extends raw_pageviews with:
 
 1. **Source Query**: UNION of `pageviews_2023` and `pageviews_2024` tables
 2. **Wiki Filter**: `en` (desktop) and `en.m` (mobile) editions only
-3. **Article Filter**: 35 pre-selected articles across 5 verticals
+3. **Article Filter**: 34 pre-selected articles across 5 verticals
 4. **Aggregation**: SUM(views) per date x article
 5. **Partition Pruning**: Date range filter applied at query time
 
@@ -149,10 +149,13 @@ Extends raw_pageviews with:
 
 | Gap Type | Affected Records | Cause | Mitigation |
 |----------|------------------|-------|------------|
-| 2024-02-18 | 35 rows (all articles) | Wikipedia source outage | Single-day gap; models handle gracefully |
-| 2023_MLB_season late-2024 | 6 rows | Year-specific article decay | Expected behavior; off-season traffic drops to zero |
+| 2024-02-18 | 34 rows (all articles) | Wikipedia source outage | Single-day gap; models handle gracefully |
 
-**Total Missing**: 41 rows (0.16% of expected 25,585)
+### Excluded Articles
+
+| Article | Reason |
+|---------|--------|
+| 2023_MLB_season | Extremely low traffic (mean 16 impressions/day); insufficient signal for forecasting |
 
 ### External Regressors: Google Trends (Scoped Out)
 
@@ -161,15 +164,15 @@ The BigQuery public Google Trends dataset was evaluated but **not included**:
 | Dataset | Assessment |
 |---------|------------|
 | `international_top_terms` | 0 rows for US country_code |
-| `top_terms` | 1/35 article matches (only "inflation") |
+| `top_terms` | 1/34 article matches (only "inflation") |
 
 **Reason**: Google Trends BQ captures "top trending" breakout events, not persistent
-topic interest. Our 35 Wikipedia articles are evergreen topics that don't appear in
+topic interest. Our 34 Wikipedia articles are evergreen topics that don't appear in
 trending search rankings. Even fuzzy matches like "bitcoin price" or "super bowl
 commercials" are event-specific queries rather than the base topic signal we need.
 
 **Alternative**: Calendar features (`day_of_week`, `is_weekend`, `is_holiday`,
-`days_to_next_holiday`) provide the cyclical seasonality signal that ARIMA_PLUS_XREG
+`days_to_next_holiday`) provide the cyclical seasonality signal that ARIMA+ XREG
 external regressors require. These are deterministic and always available at
 forecast time—a cleaner approach than sparse, misaligned Trends data.
 
@@ -319,11 +322,11 @@ Desktop and mobile splits vary by article category:
 
 ## Holiday and Event Coverage
 
-### US Holidays Included (62 total, 2022-2024)
+### US Holidays Included (83 total, 2022-2025)
 
 - Federal holidays (New Year, MLK Day, Presidents Day, Memorial Day, Independence Day, Labor Day, Columbus Day, Veterans Day, Thanksgiving, Christmas)
 - Commercial holidays (Easter, Mother's Day, Father's Day, Halloween, Black Friday, Cyber Monday)
-- Covered years: 2022-2024 (2022 included for look-back features)
+- Covered years: 2022-2025 (2022 for look-back features, 2025 for forecast horizon)
 - Note: Father's Day 2022 coincided with Juneteenth (June 19), counted once
 
 ### Known High-Impact Events
@@ -366,6 +369,10 @@ See `config/events.py` for the full programmatic event registry.
 | 1.1 | 2026-03-08 | Merged article selection rationale |
 | 1.2 | 2026-03-08 | Absorbed validation report (per-ad-unit stats, device mix, events) |
 | 1.3 | 2026-03-08 | Consistency audit fixes (holiday count 62, cross-references) |
+| 1.4 | 2026-03-09 | Cohesion audit: article count (34), holiday count (83), MAPE precision, date formats |
+| 1.5 | 2026-03-10 | Display name consistency: ARIMA_PLUS -> ARIMA+ across all docs |
+| 1.6 | 2026-03-10 | CV threshold alignment: unified to two-tier (0.5) across docs and UI |
+| 1.7 | 2026-03-10 | Absorbed model_findings.md into README.md; removed duplicate doc |
 
 ---
 
