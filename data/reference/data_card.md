@@ -9,7 +9,7 @@
 | Date Range | 2023-01-01 to 2024-12-31 (731 days) |
 | Granularity | Daily aggregation from hourly source |
 | Total Records | 24,854 rows |
-| Ad Units (Articles) | 34 (2023_MLB_season excluded due to low traffic) |
+| Ad Units (Articles) | 35 extracted, 34 forecasted (2023_MLB_season excluded due to low traffic) |
 | Verticals | 5 (Technology, Sports, Entertainment, Finance, Health) |
 
 ---
@@ -373,6 +373,7 @@ See `config/events.py` for the full programmatic event registry.
 | 1.5 | 2026-03-10 | Display name consistency: ARIMA_PLUS -> ARIMA+ across all docs |
 | 1.6 | 2026-03-10 | CV threshold alignment: unified to two-tier (0.5) across docs and UI |
 | 1.7 | 2026-03-10 | Absorbed model_findings.md into README.md; removed duplicate doc |
+| 1.8 | 2026-03-10 | Clarify article count: 35 extracted, 34 forecasted (MLB excluded) |
 
 ---
 

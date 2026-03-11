@@ -7,12 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY requirements-app.txt .
-RUN pip install --no-cache-dir -r requirements-app.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code (dashboard only; src/ contains pipeline utilities, not needed here)
 COPY config/ config/
-COPY src/ src/
 COPY app/ app/
 COPY .streamlit/ .streamlit/
 

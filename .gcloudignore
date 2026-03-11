@@ -21,7 +21,15 @@ scripts/
 sql/
 data/
 docs/
-tests/
+.devcontainer/
+
+# Vertex AI pipeline code (separate from Cloud Run dashboard build)
+# pipelines/ contains Kubeflow DAG definitions compiled separately via kfp.v2.compiler
+# and uploaded to Cloud Storage for Cloud Scheduler triggers
+# Note: pipelines/*.yaml (compiler output) is excluded by this directory exclusion
+pipelines/
+
+# Note: tests/ and src/ are intentionally NOT excluded (Cloud Build CI needs them)
 
 # Documentation (except README)
 *.md

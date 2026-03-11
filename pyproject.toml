@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Ad inventory demand forecasting system using BigQuery ML"
 readme = "README.md"
 requires-python = ">=3.11"
+# Pipeline dependencies for src/ scripts (data extraction, model training).
+# NOTE: Some packages also appear in requirements.txt for dashboard use.
+# This duplication is intentional - see requirements.txt header for rationale.
 dependencies = [
     "google-cloud-bigquery>=3.25.0",
     "python-dotenv>=1.0.0",
@@ -16,6 +19,7 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.3.0",
+    "kfp>=2.0.0",
 ]
 
 [tool.ruff]

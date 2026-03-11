@@ -135,25 +135,10 @@ st.subheader("Deployment")
 st.markdown("""
 **Local Development:**
 ```bash
-pip install -r requirements-app.txt
+pip install -r requirements.txt
 streamlit run app/main.py
 ```
 
-**Docker (Cloud Run ready):**
-```bash
-docker build -t ad-forecast-dashboard .
-docker run -p 8080:8080 \\
-  -v ~/.config/gcloud:/root/.config/gcloud \\
-  ad-forecast-dashboard
-```
-
-**Cloud Run Deployment:**
-```bash
-gcloud builds submit --tag gcr.io/PROJECT_ID/ad-inventory-dashboard
-gcloud run deploy ad-inventory-dashboard \\
-  --image gcr.io/PROJECT_ID/ad-inventory-dashboard \\
-  --platform managed \\
-  --region us-central1 \\
-  --allow-unauthenticated
-```
+**Production:** See [README.md](https://github.com/vxa8502/ad-inventory-forecast#deployment)
+for Cloud Run deployment, CI/CD setup, and IAM configuration.
 """)

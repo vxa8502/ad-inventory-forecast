@@ -1,5 +1,13 @@
 # Streamlit Dashboard Dependencies
 # ---------------------------------
+# Dashboard-specific packages for the Streamlit app container.
+#
+# NOTE: Some packages (google-cloud-bigquery, pandas, pyarrow, python-dotenv)
+# also appear in pyproject.toml. This duplication is intentional:
+#   - pyproject.toml: `pip install -e .` for pipeline scripts (src/)
+#   - requirements.txt: `pip install -r requirements.txt` for dashboard (app/)
+#   - CI/CD installs both: `pip install -e ".[dev]" -r requirements.txt`
+#
 # Core dashboard framework
 streamlit>=1.32.0
 
@@ -9,7 +17,7 @@ streamlit-mermaid>=0.2.0
 
 # BigQuery client
 google-cloud-bigquery>=3.25.0
-db-dtypes>=1.2.0
+db-dtypes>=1.2.0  # Required for BigQuery DataFrame conversion in Streamlit
 
 # Data manipulation
 pandas>=2.2.0

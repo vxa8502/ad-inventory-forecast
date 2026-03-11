@@ -1,12 +1,12 @@
 steps:
   # Step 1: Install dependencies and run tests
+  # Note: pyproject.toml has pipeline deps, requirements.txt has dashboard deps
   - name: 'python:3.11-slim'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        pip install --quiet pytest pytest-mock google-cloud-bigquery python-dotenv
-        pip install --quiet -e .
+        pip install --quiet -e ".[dev]" -r requirements.txt
         pytest tests/ -v --tb=short
 
   # Step 2: Build Docker image with commit SHA and latest tags
@@ -41,6 +41,9 @@ steps:
       - '--memory=1Gi'
       - '--timeout=300'
 
+# Overall build timeout (20 min) covers all steps including Docker build.
+# Individual step timeouts not specified; Cloud Build will fail the entire
+# build if any step exceeds the remaining time budget.
 timeout: '1200s'
 
 options:
